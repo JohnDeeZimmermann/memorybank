@@ -79,6 +79,12 @@ fn validate_input(conn: &rusqlite::Connection, input: &AddDocumentInput) -> CliR
             "Field 'document' must not be empty".to_string(),
         ));
     }
+    if input.document.chars().count() > 10_000 {
+        return Err(CliError::Validation(format!(
+            "Field 'document' must not exceed 10,000 characters (got {})",
+            input.document.chars().count()
+        )));
+    }
     if input.summary.trim().is_empty() {
         return Err(CliError::Validation(
             "Field 'summary' must not be empty".to_string(),

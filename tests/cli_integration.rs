@@ -895,3 +895,262 @@ fn all_query_commands_print_read_hint_at_bottom() {
         "query-plans should include read hint"
     );
 }
+
+#[test]
+fn add_rejects_document_body_exceeding_ten_thousand_characters() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let payload = json!({
+        "document": "x".repeat(10001),
+        "summary": "too long body",
+        "related_files": [],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+
+    let output = run_cli_with_stdin(root, &["add"], &payload);
+    assert_failure(&output);
+
+    let err = stderr(&output);
+    assert!(err.contains("ERROR: VALIDATION"), "stderr: {err}");
+    assert!(err.contains("10,000 characters"), "stderr: {err}");
+    assert!(err.contains("10001"), "stderr: {err}");
+}
+
+#[test]
+fn add_accepts_document_body_at_exactly_ten_thousand_characters() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let payload = json!({
+        "document": "x".repeat(10000),
+        "summary": "max length body",
+        "related_files": [],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+
+    let output = run_cli_with_stdin(root, &["add"], &payload);
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("# Memory Document Added"),
+        "stdout: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn query_files_truncates_large_document_bodies_to_two_thousand_characters() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let payload = json!({
+        "document": "y".repeat(3000),
+        "summary": "truncation test",
+        "related_files": ["big-file.txt"],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+
+    let add = run_cli_with_stdin(root, &["add"], &payload);
+    assert_success(&add);
+    let id = extract_backticked_field(&stdout(&add), "ID");
+
+    let query = run_cli(root, &["query-files", "big-file.txt"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(
+        out.contains("... (truncated to 2,000 characters"),
+        "stdout should include truncation notice: {out}"
+    );
+    assert!(
+        out.contains(&id),
+        "stdout should reference truncated document id {id}: {out}"
+    );
+    assert!(
+        out.contains(&format!("memorybank read {id}")),
+        "stdout should include read command for truncated doc: {out}"
+    );
+}
+
+#[test]
+fn query_files_does_not_truncate_short_document_bodies() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let payload = json!({
+        "document": "Short body text.",
+        "summary": "short body test",
+        "related_files": ["small-file.txt"],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+
+    let add = run_cli_with_stdin(root, &["add"], &payload);
+    assert_success(&add);
+
+    let query = run_cli(root, &["query-files", "small-file.txt"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(out.contains("Short body text."), "stdout: {out}");
+    assert!(
+        !out.contains("(truncated"),
+        "short body should not be truncated: {out}"
+    );
+}
+
+#[test]
+fn add_rejects_body_just_over_limit_counts_chars_not_bytes() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let body = format!("{}{}", "a".repeat(5000), "é".repeat(5001));
+    assert_eq!(body.chars().count(), 10001);
+    assert!(body.len() > 10001, "utf-8 byte length should exceed char count");
+
+    let payload = json!({
+        "document": body,
+        "summary": "unicode limit",
+        "related_files": [],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+
+    let output = run_cli_with_stdin(root, &["add"], &payload);
+    assert_failure(&output);
+
+    let err = stderr(&output);
+    assert!(err.contains("ERROR: VALIDATION"), "stderr: {err}");
+    assert!(err.contains("10,000"), "stderr: {err}");
+    assert!(err.contains("10001"), "stderr: {err}");
+}
+
+#[test]
+fn query_files_truncation_boundary_exactly_two_thousand_chars_not_truncated() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let body = "z".repeat(2000);
+    let payload = json!({
+        "document": body,
+        "summary": "boundary test",
+        "related_files": ["boundary.txt"],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+
+    let add = run_cli_with_stdin(root, &["add"], &payload);
+    assert_success(&add);
+
+    let query = run_cli(root, &["query-files", "boundary.txt"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(!out.contains("(truncated"), "stdout: {out}");
+    assert!(
+        out.contains("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
+        "stdout should contain full body content: {out}"
+    );
+}
+
+#[test]
+fn query_files_mixed_truncation_multiple_direct_matches() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let short_payload = json!({
+        "document": "short body here",
+        "summary": "short",
+        "related_files": ["shared.txt"],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &short_payload));
+
+    let long_body = "k".repeat(3000);
+    let long_payload = json!({
+        "document": long_body,
+        "summary": "long",
+        "related_files": ["shared.txt"],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &long_payload));
+
+    let query = run_cli(root, &["query-files", "shared.txt"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(out.contains("short body here"), "stdout: {out}");
+    assert!(
+        !out.contains(&"k".repeat(3000)),
+        "stdout should not contain full 3000-char body: {out}"
+    );
+    assert!(
+        out.contains("... (truncated to 2,000 characters"),
+        "stdout should show truncation notice: {out}"
+    );
+    assert_eq!(
+        out.matches("(truncated").count(),
+        1,
+        "expected exactly one truncation notice: {out}"
+    );
+}
+
+#[test]
+fn rebuild_preserves_documents_at_limits() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let body = "w".repeat(10000);
+    let payload = json!({
+        "document": body,
+        "summary": "rebuild limit",
+        "related_files": ["rebuild.txt"],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+
+    let add = run_cli_with_stdin(root, &["add"], &payload);
+    assert_success(&add);
+    let id = extract_backticked_field(&stdout(&add), "ID");
+
+    assert_success(&run_cli(root, &["init", "--rebuild"]));
+
+    let read_out = stdout(&run_cli(root, &["read", &id]));
+    assert!(
+        read_out.contains("wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww"),
+        "read output should contain full long body: {read_out}"
+    );
+    assert!(
+        !read_out.contains("(truncated"),
+        "read output should not be truncated: {read_out}"
+    );
+
+    let query = run_cli(root, &["query-files", "rebuild.txt"]);
+    assert_success(&query);
+    assert!(
+        stdout(&query).contains("(truncated"),
+        "query-files output should be truncated"
+    );
+}

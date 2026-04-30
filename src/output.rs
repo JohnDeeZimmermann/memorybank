@@ -79,7 +79,17 @@ pub fn print_query_results(
             if let Some(bodies) = direct_bodies {
                 if let Some(body) = bodies.get(i) {
                     println!("\n---\n");
-                    println!("{}", body.trim_end());
+                    let trimmed = body.trim_end();
+                    if trimmed.chars().count() > 2_000 {
+                        let head: String = trimmed.chars().take(2_000).collect();
+                        println!("{}", head);
+                        println!(
+                            "\n... (truncated to 2,000 characters. Use `memorybank read {}` to read the full document.)",
+                            summary.id
+                        );
+                    } else {
+                        println!("{}", trimmed);
+                    }
                     println!();
                 }
             }
