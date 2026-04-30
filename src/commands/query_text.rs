@@ -29,7 +29,7 @@ pub fn run(
 
     let direct_ids = direct.iter().map(|doc| doc.id.clone()).collect::<Vec<_>>();
     let related = db::related_documents(&conn, &direct_ids, include_invalidated)?;
-    output::print_query_results(title, &direct, &related);
+    output::print_query_results(title, &direct, &related, None);
     Ok(())
 }
 

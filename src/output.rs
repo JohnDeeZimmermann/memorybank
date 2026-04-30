@@ -63,17 +63,31 @@ pub fn print_read_document(
     print_related(related);
 }
 
-pub fn print_query_results(title: &str, direct: &[DocumentSummary], related: &[DocumentSummary]) {
+pub fn print_query_results(
+    title: &str,
+    direct: &[DocumentSummary],
+    related: &[DocumentSummary],
+    direct_bodies: Option<&[String]>,
+) {
     println!("# Query Results: {title}\n");
     println!("## Direct Matches\n");
     if direct.is_empty() {
         println!("No direct matches.");
     } else {
-        for summary in direct {
+        for (i, summary) in direct.iter().enumerate() {
             print_summary(summary, true);
+            if let Some(bodies) = direct_bodies {
+                if let Some(body) = bodies.get(i) {
+                    println!("\n---\n");
+                    println!("{}", body.trim_end());
+                    println!();
+                }
+            }
         }
     }
     print_related(related);
+    println!("\n---\n");
+    println!("Use `memorybank read <id>` to read a document's full content.");
 }
 
 fn print_related(related: &[DocumentSummary]) {

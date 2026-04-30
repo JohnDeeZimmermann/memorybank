@@ -109,7 +109,10 @@ fn init_creates_memory_layout_database_and_init_patch() {
 
     let memory = root.join(".memory");
     assert!(memory.is_dir(), ".memory should exist");
-    assert!(memory.join("documents").is_dir(), "documents dir should exist");
+    assert!(
+        memory.join("documents").is_dir(),
+        "documents dir should exist"
+    );
     assert!(memory.join("sql").is_dir(), "sql dir should exist");
     assert!(
         memory.join("memorybank.sqlite3").is_file(),
@@ -197,7 +200,10 @@ fn query_files_returns_direct_matches_only_for_matching_files() {
     let out = stdout(&query);
 
     assert!(out.contains("## Direct Matches"));
-    assert!(out.contains(&format!("`{id1}`")), "expected matching doc id in output: {out}");
+    assert!(
+        out.contains(&format!("`{id1}`")),
+        "expected matching doc id in output: {out}"
+    );
     assert!(
         !out.contains(&format!("`{id2}`")),
         "non-matching doc should not appear as direct match: {out}"
@@ -466,7 +472,8 @@ fn add_rejects_missing_and_nonexistent_related_document_ids() {
     let out2 = run_cli_with_stdin(root, &["add"], &nonexistent_id_payload);
     assert_failure(&out2);
     assert!(
-        stderr(&out2).contains("Related document '550e8400-e29b-41d4-a716-446655440000' does not exist"),
+        stderr(&out2)
+            .contains("Related document '550e8400-e29b-41d4-a716-446655440000' does not exist"),
         "stderr: {}",
         stderr(&out2)
     );
@@ -607,7 +614,10 @@ fn query_files_without_args_fails_via_clap() {
     let output = run_cli(dir.path(), &["query-files"]);
     assert_failure(&output);
     let err = stderr(&output);
-    assert!(err.contains("required") || err.contains("Usage:"), "stderr: {err}");
+    assert!(
+        err.contains("required") || err.contains("Usage:"),
+        "stderr: {err}"
+    );
 }
 
 #[test]
@@ -621,7 +631,13 @@ fn init_is_idempotent_and_does_not_duplicate_init_patch() {
     let sql_dir = root.join(".memory/sql");
     let entries = fs::read_dir(&sql_dir)
         .expect("read sql dir")
-        .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect::<Vec<_>>();
     let init_count = entries
         .iter()
@@ -750,4 +766,132 @@ fn add_auto_initializes_without_printing_init_output() {
         "add should not print init output: {out}"
     );
     assert!(root.join(".memory/memorybank.sqlite3").is_file());
+}
+
+#[test]
+fn query_files_output_includes_document_bodies_for_direct_matches() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let payload = json!({
+        "document": "This is the document body content.",
+        "summary": "body-test",
+        "related_files": ["src/main.rs"],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+    let add = run_cli_with_stdin(root, &["add"], &payload);
+    assert_success(&add);
+
+    let query = run_cli(root, &["query-files", "src/main.rs"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(out.contains("## Direct Matches"), "stdout: {out}");
+    assert!(
+        out.contains("This is the document body content."),
+        "stdout should include document body: {out}"
+    );
+    assert!(
+        out.contains("**Summary:** body-test"),
+        "stdout should include summary metadata: {out}"
+    );
+}
+
+#[test]
+fn query_text_research_and_plans_do_not_include_document_bodies() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let research_payload = json!({
+        "document": "Research body text with uniquekeyword123",
+        "summary": "research test",
+        "related_files": [],
+        "related_documents": [],
+        "type": "RESEARCH"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &research_payload));
+
+    let plan_payload = json!({
+        "document": "Plan body text with uniquekeyword123",
+        "summary": "plan test",
+        "related_files": [],
+        "related_documents": [],
+        "type": "PLAN"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &plan_payload));
+
+    let research_query = run_cli(root, &["query-research", "uniquekeyword123"]);
+    assert_success(&research_query);
+    let research_out = stdout(&research_query);
+    assert!(
+        research_out.contains("## Direct Matches"),
+        "stdout: {research_out}"
+    );
+    assert!(
+        research_out.contains("**Summary:** research test"),
+        "stdout: {research_out}"
+    );
+    assert!(
+        !research_out.contains("Research body text with uniquekeyword123"),
+        "research query should not include body text: {research_out}"
+    );
+
+    let plan_query = run_cli(root, &["query-plans", "uniquekeyword123"]);
+    assert_success(&plan_query);
+    let plan_out = stdout(&plan_query);
+    assert!(plan_out.contains("## Direct Matches"), "stdout: {plan_out}");
+    assert!(
+        plan_out.contains("**Summary:** plan test"),
+        "stdout: {plan_out}"
+    );
+    assert!(
+        !plan_out.contains("Plan body text with uniquekeyword123"),
+        "plans query should not include body text: {plan_out}"
+    );
+}
+
+#[test]
+fn all_query_commands_print_read_hint_at_bottom() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let payload = json!({
+        "document": "hint test",
+        "summary": "hint",
+        "related_files": ["src/lib.rs"],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &payload));
+
+    let hint = "Use `memorybank read <id>` to read a document's full content.";
+
+    let files_query = run_cli(root, &["query-files", "src/lib.rs"]);
+    assert_success(&files_query);
+    assert!(
+        stdout(&files_query).contains(hint),
+        "query-files should include read hint"
+    );
+
+    let research_query = run_cli(root, &["query-research", "hint"]);
+    assert_success(&research_query);
+    assert!(
+        stdout(&research_query).contains(hint),
+        "query-research should include read hint"
+    );
+
+    let plans_query = run_cli(root, &["query-plans", "hint"]);
+    assert_success(&plans_query);
+    assert!(
+        stdout(&plans_query).contains(hint),
+        "query-plans should include read hint"
+    );
 }
