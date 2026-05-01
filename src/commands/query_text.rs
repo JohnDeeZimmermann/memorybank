@@ -1,51 +1,48 @@
-use std::fs;
-use std::path::Path;
-
-use crate::db;
-use crate::error::{CliError, CliResult};
+use crate::error::CliResult;
 use crate::models::{DocumentSummary, DocumentType};
 use crate::output;
-use crate::paths;
+use crate::scorer;
+use crate::store::Store;
 
 pub fn run(
-    root: &Path,
+    store: &Store,
     title: &str,
     document_type: DocumentType,
     term: &str,
     include_invalidated: bool,
 ) -> CliResult<()> {
-    paths::require_initialized(root)?;
-    let conn = db::open(root)?;
-    let needle = term.to_lowercase();
-    let candidates = db::documents_by_type(&conn, document_type, include_invalidated)?;
-    let mut direct = Vec::new();
-    for candidate in candidates {
-        if candidate.quick_summary.to_lowercase().contains(&needle)
-            || document_body_contains(root, &conn, &candidate, &needle)?
-        {
-            direct.push(candidate);
-        }
+    let query = term.trim();
+    if query.is_empty() {
+        output::print_query_results(&mut std::io::stdout(), title, &[], &[], None);
+        return Ok(());
     }
 
-    let direct_ids = direct.iter().map(|doc| doc.id.clone()).collect::<Vec<_>>();
-    let related = db::related_documents(&conn, &direct_ids, include_invalidated)?;
-    output::print_query_results(title, &direct, &related, None);
-    Ok(())
-}
+    let candidates = store.documents_by_type(document_type, include_invalidated)?;
 
-fn document_body_contains(
-    root: &Path,
-    conn: &rusqlite::Connection,
-    summary: &DocumentSummary,
-    needle: &str,
-) -> CliResult<bool> {
-    let document = db::get_document(conn, &summary.id)?;
-    let path = paths::memory_dir(root).join(document.document_path);
-    let body = fs::read_to_string(&path).map_err(|err| {
-        CliError::Storage(format!(
-            "Unable to read document '{}': {err}",
-            path.display()
-        ))
-    })?;
-    Ok(body.to_lowercase().contains(needle))
+    let scored_pairs: Vec<(usize, String, String)> = candidates
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let doc = store.get_document(&s.id).expect("document should exist");
+            let body = store.document_body(&doc).expect("body should be readable");
+            (i, s.quick_summary.clone(), body)
+        })
+        .collect();
+
+    let triplets: Vec<(usize, &str, &str)> = scored_pairs
+        .iter()
+        .map(|(i, s, b)| (*i, s.as_str(), b.as_str()))
+        .collect();
+
+    let scored_hits = scorer::score_candidates(query, &triplets);
+
+    let direct: Vec<DocumentSummary> = scored_hits
+        .iter()
+        .map(|hit| candidates[hit.original_index].clone())
+        .collect();
+
+    let direct_ids: Vec<String> = direct.iter().map(|d| d.id.clone()).collect();
+    let related = store.related_documents(&direct_ids, include_invalidated)?;
+    output::print_query_results(&mut std::io::stdout(), title, &direct, &related, None);
+    Ok(())
 }

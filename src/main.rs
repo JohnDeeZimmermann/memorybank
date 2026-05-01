@@ -5,7 +5,9 @@ mod error;
 mod models;
 mod output;
 mod paths;
+mod scorer;
 mod sql_log;
+mod store;
 
 use clap::Parser;
 
@@ -26,31 +28,50 @@ fn run() -> CliResult<()> {
 
     match cli.command {
         Commands::Init { rebuild } => commands::init::run(&root, rebuild),
-        Commands::Add => commands::add::run(&root),
-        Commands::Read { document_id } => commands::read::run(&root, &document_id),
+        Commands::Add => {
+            let store = store::Store::open(&root)?;
+            commands::add::run(&store)
+        }
+        Commands::Read { document_id } => {
+            paths::require_initialized(&root)?;
+            let store = store::Store::open_existing(&root)?;
+            commands::read::run(&store, &document_id)
+        }
         Commands::QueryFiles {
             files,
             include_invalidated,
-        } => commands::query_files::run(&root, &files, include_invalidated),
+        } => {
+            paths::require_initialized(&root)?;
+            let store = store::Store::open_existing(&root)?;
+            commands::query_files::run(&store, &files, include_invalidated)
+        }
         Commands::QueryResearch {
             topic,
             include_invalidated,
-        } => commands::query_text::run(
-            &root,
-            "Research",
-            DocumentType::Research,
-            &topic,
-            include_invalidated,
-        ),
+        } => {
+            paths::require_initialized(&root)?;
+            let store = store::Store::open_existing(&root)?;
+            commands::query_text::run(
+                &store,
+                "Research",
+                DocumentType::Research,
+                &topic,
+                include_invalidated,
+            )
+        }
         Commands::QueryPlans {
             term,
             include_invalidated,
-        } => commands::query_text::run(
-            &root,
-            "Plans",
-            DocumentType::Plan,
-            &term,
-            include_invalidated,
-        ),
+        } => {
+            paths::require_initialized(&root)?;
+            let store = store::Store::open_existing(&root)?;
+            commands::query_text::run(
+                &store,
+                "Plans",
+                DocumentType::Plan,
+                &term,
+                include_invalidated,
+            )
+        }
     }
 }

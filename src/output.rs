@@ -1,112 +1,117 @@
+use std::io::Write;
 use std::path::Path;
 
 use crate::models::{Document, DocumentSummary};
 
-pub fn print_init(root: &Path, rebuild: bool, init_patch: &Path) {
-    println!("# Memory Bank Initialized\n");
-    println!("- **Root:** `{}`", root.display());
-    println!(
-        "- **Memory directory:** `{}`",
-        root.join(".memory").display()
-    );
-    println!(
-        "- **Documents directory:** `{}`",
-        root.join(".memory/documents").display()
-    );
-    println!(
-        "- **SQL directory:** `{}`",
-        root.join(".memory/sql").display()
-    );
-    println!(
-        "- **Database:** `{}`",
-        root.join(".memory/memorybank.sqlite3").display()
-    );
-    println!("- **Init patch:** `{}`", init_patch.display());
-    println!("- **Rebuilt:** `{}`", rebuild);
+macro_rules! w {
+    ($dst:expr, $($arg:tt)*) => {
+        writeln!($dst, $($arg)*).unwrap()
+    };
+}
+
+pub fn print_init(
+    out: &mut impl Write,
+    root: &Path,
+    rebuild: bool,
+    init_patch: &Path,
+) {
+    w!(out, "# Memory Bank Initialized\n");
+    w!(out, "- **Root:** `{}`", root.display());
+    w!(out, "- **Memory directory:** `{}`", root.join(".memory").display());
+    w!(out, "- **Documents directory:** `{}`", root.join(".memory/documents").display());
+    w!(out, "- **SQL directory:** `{}`", root.join(".memory/sql").display());
+    w!(out, "- **Database:** `{}`", root.join(".memory/memorybank.sqlite3").display());
+    w!(out, "- **Init patch:** `{}`", init_patch.display());
+    w!(out, "- **Rebuilt:** `{}`", rebuild);
 }
 
 pub fn print_add_success(
+    out: &mut impl Write,
     doc: &Document,
     related_files: &[String],
     related_docs: &[String],
     sql_patch: &Path,
 ) {
-    println!("# Memory Document Added\n");
-    println!("- **ID:** `{}`", doc.id);
-    println!("- **Type:** {}", doc.document_type);
-    println!("- **Created:** `{}`", doc.created_at);
-    println!("- **Summary:** {}", doc.quick_summary);
-    println!("- **Path:** `{}`", doc.document_path.display());
-    println!("- **SQL patch:** `{}`", sql_patch.display());
-    print_string_list("Related files", related_files);
-    print_string_list("Related documents", related_docs);
+    w!(out, "# Memory Document Added\n");
+    w!(out, "- **ID:** `{}`", doc.id);
+    w!(out, "- **Type:** {}", doc.document_type);
+    w!(out, "- **Created:** `{}`", doc.created_at);
+    w!(out, "- **Summary:** {}", doc.quick_summary);
+    w!(out, "- **Path:** `{}`", doc.document_path.display());
+    w!(out, "- **SQL patch:** `{}`", sql_patch.display());
+    print_string_list(out, "Related files", related_files);
+    print_string_list(out, "Related documents", related_docs);
 }
 
 pub fn print_read_document(
+    out: &mut impl Write,
     doc: &Document,
     body: &str,
     files: &[String],
     related: &[DocumentSummary],
 ) {
-    println!("# Memory Document {}\n", doc.id);
-    println!("- **Type:** {}", doc.document_type);
-    println!("- **Created:** `{}`", doc.created_at);
-    println!("- **Invalidated:** `{}`", doc.invalidated);
+    w!(out, "# Memory Document {}\n", doc.id);
+    w!(out, "- **Type:** {}", doc.document_type);
+    w!(out, "- **Created:** `{}`", doc.created_at);
+    w!(out, "- **Invalidated:** `{}`", doc.invalidated);
     if let Some(reason) = &doc.invalidation_reason {
-        println!("- **Invalidation reason:** {}", reason);
+        w!(out, "- **Invalidation reason:** {}", reason);
     }
-    println!("- **Summary:** {}", doc.quick_summary);
-    println!("- **Path:** `{}`", doc.document_path.display());
-    print_string_list("Related files", files);
-    println!("\n## Document\n");
-    println!("{}", body.trim_end());
-    print_related(related);
+    w!(out, "- **Summary:** {}", doc.quick_summary);
+    w!(out, "- **Path:** `{}`", doc.document_path.display());
+    print_string_list(out, "Related files", files);
+    w!(out, "\n## Document\n");
+    w!(out, "{}", body.trim_end());
+    print_related(out, related);
 }
 
 pub fn print_query_results(
+    out: &mut impl Write,
     title: &str,
     direct: &[DocumentSummary],
     related: &[DocumentSummary],
     direct_bodies: Option<&[String]>,
 ) {
-    println!("# Query Results: {title}\n");
-    println!("## Direct Matches\n");
+    w!(out, "# Query Results: {title}\n");
+    w!(out, "## Direct Matches\n");
     if direct.is_empty() {
-        println!("No direct matches.");
+        w!(out, "No direct matches.");
     } else {
         for (i, summary) in direct.iter().enumerate() {
-            print_summary(summary, true);
+            print_summary(out, summary, true);
             if let Some(bodies) = direct_bodies {
                 if let Some(body) = bodies.get(i) {
-                    println!("\n---\n");
+                    w!(out, "\n---\n");
                     let trimmed = body.trim_end();
                     if trimmed.chars().count() > 2_000 {
                         let head: String = trimmed.chars().take(2_000).collect();
-                        println!("{}", head);
-                        println!(
+                        w!(out, "{}", head);
+                        w!(
+                            out,
                             "\n... (truncated to 2,000 characters. Use `memorybank read {}` to read the full document.)",
                             summary.id
                         );
                     } else {
-                        println!("{}", trimmed);
+                        w!(out, "{}", trimmed);
                     }
-                    println!();
+                    w!(out, "");
                 }
             }
         }
     }
-    print_related(related);
-    println!("\n---\n");
-    println!("Use `memorybank read <id>` to read a document's full content.");
+    print_related(out, related);
+    w!(out, "\n---\n");
+    w!(out, "Use `memorybank read <id>` to read a document's full content.");
 }
 
-fn print_related(related: &[DocumentSummary]) {
-    println!("\n## Related Suggestions\n");
+fn print_related(out: &mut impl Write, related: &[DocumentSummary]) {
+    w!(out, "\n## Related Suggestions\n");
     if related.is_empty() {
-        println!("No related suggestions.");
+        w!(out, "No related suggestions.");
     } else {
         for summary in related {
-            println!(
+            w!(
+                out,
                 "- **ID:** `{}` — {} — {}{}",
                 summary.id,
                 summary.document_type,
@@ -117,20 +122,21 @@ fn print_related(related: &[DocumentSummary]) {
     }
 }
 
-fn print_summary(summary: &DocumentSummary, include_files: bool) {
-    println!("- **ID:** `{}`", summary.id);
-    println!("  - **Type:** {}", summary.document_type);
-    println!("  - **Created:** `{}`", summary.created_at);
-    println!("  - **Invalidated:** `{}`", summary.invalidated);
+fn print_summary(out: &mut impl Write, summary: &DocumentSummary, include_files: bool) {
+    w!(out, "- **ID:** `{}`", summary.id);
+    w!(out, "  - **Type:** {}", summary.document_type);
+    w!(out, "  - **Created:** `{}`", summary.created_at);
+    w!(out, "  - **Invalidated:** `{}`", summary.invalidated);
     if let Some(reason) = &summary.invalidation_reason {
-        println!("  - **Invalidation reason:** {}", reason);
+        w!(out, "  - **Invalidation reason:** {}", reason);
     }
-    println!("  - **Summary:** {}", summary.quick_summary);
+    w!(out, "  - **Summary:** {}", summary.quick_summary);
     if include_files {
         if summary.related_files.is_empty() {
-            println!("  - **Related files:** none");
+            w!(out, "  - **Related files:** none");
         } else {
-            println!(
+            w!(
+                out,
                 "  - **Related files:** {}",
                 summary
                     .related_files
@@ -143,13 +149,13 @@ fn print_summary(summary: &DocumentSummary, include_files: bool) {
     }
 }
 
-fn print_string_list(label: &str, values: &[String]) {
-    println!("\n## {label}\n");
+fn print_string_list(out: &mut impl Write, label: &str, values: &[String]) {
+    w!(out, "\n## {label}\n");
     if values.is_empty() {
-        println!("None.");
+        w!(out, "None.");
     } else {
         for value in values {
-            println!("- `{value}`");
+            w!(out, "- `{value}`");
         }
     }
 }

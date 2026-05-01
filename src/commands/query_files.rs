@@ -1,35 +1,33 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::db;
 use crate::error::CliResult;
 use crate::output;
 use crate::paths;
+use crate::store::Store;
 
-pub fn run(root: &Path, files: &[PathBuf], include_invalidated: bool) -> CliResult<()> {
-    paths::require_initialized(root)?;
-    let conn = db::open(root)?;
-    let normalized = files
+pub fn run(store: &Store, files: &[PathBuf], include_invalidated: bool) -> CliResult<()> {
+    if files.len() > 3 {
+        return Err(crate::error::CliError::Validation(format!(
+            "query-files accepts at most 3 files, got {}",
+            files.len()
+        )));
+    }
+
+    let normalized: Vec<String> = files
         .iter()
-        .map(|file| paths::normalize_related_file(root, file))
+        .map(|file| paths::normalize_related_file(store.root(), file))
         .collect::<CliResult<Vec<_>>>()?;
-    let direct = db::documents_for_files(&conn, &normalized, include_invalidated)?;
-    let direct_ids = direct.iter().map(|doc| doc.id.clone()).collect::<Vec<_>>();
-    let related = db::related_documents(&conn, &direct_ids, include_invalidated)?;
+
+    let direct = store.documents_for_files(&normalized, include_invalidated)?;
+    let direct_ids: Vec<String> = direct.iter().map(|d| d.id.clone()).collect();
+    let related = store.related_documents(&direct_ids, include_invalidated)?;
 
     let mut bodies = Vec::new();
     for summary in &direct {
-        let document = db::get_document(&conn, &summary.id)?;
-        let body_path = paths::memory_dir(root).join(&document.document_path);
-        let body = fs::read_to_string(&body_path).map_err(|err| {
-            crate::error::CliError::Storage(format!(
-                "Unable to read document '{}': {err}",
-                body_path.display()
-            ))
-        })?;
-        bodies.push(body);
+        let document = store.get_document(&summary.id)?;
+        bodies.push(store.document_body(&document)?);
     }
 
-    output::print_query_results("Files", &direct, &related, Some(&bodies));
+    output::print_query_results(&mut std::io::stdout(), "Files", &direct, &related, Some(&bodies));
     Ok(())
 }
