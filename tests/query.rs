@@ -2,6 +2,8 @@ mod common;
 
 use common::*;
 use serde_json::json;
+use serde_json::Value;
+use std::fs;
 use tempfile::tempdir;
 
 #[test]
@@ -391,7 +393,7 @@ fn query_text_matches_body_case_insensitively_not_only_summary() {
 }
 
 #[test]
-fn query_text_research_and_plans_do_not_include_document_bodies() {
+fn query_text_research_and_plans_include_document_body_previews() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path();
     assert_success(&run_cli(root, &["init"]));
@@ -428,8 +430,8 @@ fn query_text_research_and_plans_do_not_include_document_bodies() {
         "stdout: {research_out}"
     );
     assert!(
-        !research_out.contains("Research body text with uniquekeyword123"),
-        "research query should not include body text: {research_out}"
+        research_out.contains("Research body text with uniquekeyword123"),
+        "research query should include body preview text: {research_out}"
     );
 
     let plan_query = run_cli(root, &["query-plans", "uniquekeyword123"]);
@@ -441,8 +443,8 @@ fn query_text_research_and_plans_do_not_include_document_bodies() {
         "stdout: {plan_out}"
     );
     assert!(
-        !plan_out.contains("Plan body text with uniquekeyword123"),
-        "plans query should not include body text: {plan_out}"
+        plan_out.contains("Plan body text with uniquekeyword123"),
+        "plans query should include body preview text: {plan_out}"
     );
 }
 
@@ -510,8 +512,8 @@ fn query_research_fuzzy_typo_matches_single_edit_distance() {
 
     assert!(out.contains(&format!("`{id}`")), "stdout: {out}");
     assert!(
-        !out.contains("Detailed notes about authentication pipeline internals."),
-        "body text should stay hidden: {out}"
+        out.contains("Detailed notes about authentication pipeline internals."),
+        "body preview text should be shown: {out}"
     );
 }
 
@@ -682,7 +684,7 @@ fn query_research_fuzzy_type_filter_excludes_plan_and_commit_even_if_better_text
 }
 
 #[test]
-fn query_research_fuzzy_matches_body_but_keeps_body_hidden() {
+fn query_research_fuzzy_matches_body_and_shows_preview() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path();
     assert_success(&run_cli(root, &["init"]));
@@ -705,8 +707,133 @@ fn query_research_fuzzy_matches_body_but_keeps_body_hidden() {
 
     assert!(out.contains(&format!("`{id}`")), "stdout: {out}");
     assert!(
-        !out.contains("authentication pipeline details"),
-        "body text should be hidden: {out}"
+        out.contains("authentication pipeline details"),
+        "body preview text should be shown: {out}"
+    );
+}
+
+#[test]
+fn query_research_preview_is_limited_to_two_hundred_characters() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let body = format!(
+        "{}{}",
+        "r".repeat(200),
+        "RESEARCH_TAIL_SHOULD_NOT_APPEAR_123"
+    );
+    let payload = json!({
+        "document": body,
+        "summary": "research preview limit",
+        "related_files": [],
+        "related_documents": [],
+        "type": "RESEARCH"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &payload));
+
+    let query = run_cli(root, &["query-research", "research preview limit"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(out.contains(&"r".repeat(200)), "stdout: {out}");
+    assert!(
+        !out.contains("RESEARCH_TAIL_SHOULD_NOT_APPEAR_123"),
+        "research preview should be capped at 200 chars: {out}"
+    );
+    assert!(
+        out.contains("... (truncated to 200 characters"),
+        "stdout should include 200-char truncation notice: {out}"
+    );
+}
+
+#[test]
+fn query_plans_preview_is_limited_to_two_hundred_characters() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let body = format!("{}{}", "p".repeat(200), "PLAN_TAIL_SHOULD_NOT_APPEAR_456");
+    let payload = json!({
+        "document": body,
+        "summary": "plans preview limit",
+        "related_files": [],
+        "related_documents": [],
+        "type": "PLAN"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &payload));
+
+    let query = run_cli(root, &["query-plans", "plans preview limit"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(out.contains(&"p".repeat(200)), "stdout: {out}");
+    assert!(
+        !out.contains("PLAN_TAIL_SHOULD_NOT_APPEAR_456"),
+        "plans preview should be capped at 200 chars: {out}"
+    );
+    assert!(
+        out.contains("... (truncated to 200 characters"),
+        "stdout should include 200-char truncation notice: {out}"
+    );
+}
+
+#[test]
+fn query_research_long_body_includes_truncation_message() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let payload = json!({
+        "document": "x".repeat(500),
+        "summary": "research truncation message",
+        "related_files": [],
+        "related_documents": [],
+        "type": "RESEARCH"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &payload));
+
+    let query = run_cli(root, &["query-research", "research truncation message"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(
+        out.contains("... (truncated to 200 characters"),
+        "stdout should include truncation notice: {out}"
+    );
+}
+
+#[test]
+fn query_plans_body_at_or_under_two_hundred_chars_is_not_truncated() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+
+    let body = "full-plan-body-".to_string() + &"z".repeat(185);
+    let payload = json!({
+        "document": body,
+        "summary": "plans short preview",
+        "related_files": [],
+        "related_documents": [],
+        "type": "PLAN"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &payload));
+
+    let query = run_cli(root, &["query-plans", "plans short preview"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(
+        out.contains("full-plan-body-"),
+        "stdout should include full short body: {out}"
+    );
+    assert!(
+        !out.contains("(truncated"),
+        "body with <=200 chars should not be truncated: {out}"
     );
 }
 
@@ -796,4 +923,176 @@ fn query_research_fuzzy_stable_order_for_equal_scores() {
         first_two < second_two,
         "expected stable ordering across repeated identical queries\nrun1:\n{out_one}\nrun2:\n{out_two}"
     );
+}
+
+#[test]
+fn init_creates_default_config_file_with_expected_keys() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+
+    assert_success(&run_cli(root, &["init"]));
+
+    let config_path = root.join(".memory/config.json");
+    assert!(config_path.exists(), "expected config file at {:?}", config_path);
+
+    let raw = fs::read_to_string(&config_path).expect("read config");
+    let config: Value = serde_json::from_str(&raw).expect("valid config json");
+
+    assert_eq!(config["query_files_preview_chars"], 2000);
+    assert_eq!(config["query_text_preview_chars"], 200);
+}
+
+#[test]
+fn query_files_uses_custom_preview_limit_from_config() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+
+    assert_success(&run_cli(root, &["init"]));
+    fs::write(
+        root.join(".memory/config.json"),
+        r#"{"query_files_preview_chars":100}"#,
+    )
+    .expect("write config");
+
+    let body = format!("{}{}", "a".repeat(100), "FILE_TAIL_SHOULD_NOT_APPEAR");
+    let payload = json!({
+        "document": body,
+        "summary": "custom files preview",
+        "related_files": ["custom-file.txt"],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &payload));
+
+    let query = run_cli(root, &["query-files", "custom-file.txt"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(out.contains(&"a".repeat(100)), "stdout: {out}");
+    assert!(
+        !out.contains("FILE_TAIL_SHOULD_NOT_APPEAR"),
+        "query-files should respect 100-char preview limit: {out}"
+    );
+    assert!(
+        out.contains("(truncated to 100 characters"),
+        "stdout should include custom truncation limit: {out}"
+    );
+}
+
+#[test]
+fn query_research_uses_custom_preview_limit_from_config() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+
+    assert_success(&run_cli(root, &["init"]));
+    fs::write(
+        root.join(".memory/config.json"),
+        r#"{"query_text_preview_chars":50}"#,
+    )
+    .expect("write config");
+
+    let body = format!("{}{}", "r".repeat(50), "RESEARCH_TAIL_SHOULD_NOT_APPEAR");
+    let payload = json!({
+        "document": body,
+        "summary": "custom research preview",
+        "related_files": [],
+        "related_documents": [],
+        "type": "RESEARCH"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &payload));
+
+    let query = run_cli(root, &["query-research", "custom research preview"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(out.contains(&"r".repeat(50)), "stdout: {out}");
+    assert!(
+        !out.contains("RESEARCH_TAIL_SHOULD_NOT_APPEAR"),
+        "query-research should respect 50-char preview limit: {out}"
+    );
+    assert!(
+        out.contains("(truncated to 50 characters"),
+        "stdout should include custom truncation limit: {out}"
+    );
+}
+
+#[test]
+fn query_research_uses_default_when_query_text_limit_key_missing() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+
+    assert_success(&run_cli(root, &["init"]));
+    fs::write(
+        root.join(".memory/config.json"),
+        r#"{"query_files_preview_chars":100}"#,
+    )
+    .expect("write config");
+
+    let body = format!("{}{}", "m".repeat(200), "MISSING_KEY_DEFAULT_TAIL");
+    let payload = json!({
+        "document": body,
+        "summary": "missing key fallback",
+        "related_files": [],
+        "related_documents": [],
+        "type": "RESEARCH"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &payload));
+
+    let query = run_cli(root, &["query-research", "missing key fallback"]);
+    assert_success(&query);
+    let out = stdout(&query);
+
+    assert!(out.contains(&"m".repeat(200)), "stdout: {out}");
+    assert!(
+        !out.contains("MISSING_KEY_DEFAULT_TAIL"),
+        "query-research should use default 200-char preview: {out}"
+    );
+    assert!(
+        out.contains("(truncated to 200 characters"),
+        "stdout should include fallback default truncation limit: {out}"
+    );
+}
+
+#[test]
+fn add_auto_init_creates_default_config_file() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+
+    let payload = json!({
+        "document": "auto-init config creation",
+        "summary": "auto-init config",
+        "related_files": ["auto.txt"],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &payload));
+
+    let config_path = root.join(".memory/config.json");
+    assert!(config_path.exists(), "expected config file at {:?}", config_path);
+
+    let raw = fs::read_to_string(&config_path).expect("read config");
+    let config: Value = serde_json::from_str(&raw).expect("valid config json");
+    assert_eq!(config["query_files_preview_chars"], 2000);
+    assert_eq!(config["query_text_preview_chars"], 200);
+}
+
+#[test]
+fn invalid_config_json_causes_follow_up_commands_to_fail() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+
+    assert_success(&run_cli(root, &["init"]));
+    fs::write(root.join(".memory/config.json"), "{not-json").expect("write invalid config");
+
+    let query = run_cli(root, &["query-research", "anything"]);
+    assert_failure(&query);
+    let err = stderr(&query);
+
+    assert!(err.contains("ERROR: VALIDATION"), "stderr: {err}");
+    assert!(err.contains("Invalid config"), "stderr: {err}");
+    assert!(err.contains("config.json"), "stderr: {err}");
 }

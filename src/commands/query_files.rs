@@ -28,6 +28,16 @@ pub fn run(store: &Store, files: &[PathBuf], include_invalidated: bool) -> CliRe
         bodies.push(store.document_body(&document)?);
     }
 
-    output::print_query_results(&mut std::io::stdout(), "Files", &direct, &related, Some(&bodies));
+    let limit = store.config().query_files_preview_chars;
+    output::print_query_results(
+        &mut std::io::stdout(),
+        "Files",
+        &direct,
+        &related,
+        Some(output::BodyPreview {
+            bodies: &bodies,
+            limit,
+        }),
+    );
     Ok(())
 }

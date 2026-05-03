@@ -110,13 +110,8 @@ fn score_one(
     let has_exact = exact_summary || exact_body;
     let has_fuzzy = summary_fuzzy > 0 || body_fuzzy > 0;
 
-    let should_include = if has_exact {
-        true
-    } else if allow_fuzzy && has_fuzzy && final_score >= MIN_FUZZY_SCORE {
-        true
-    } else {
-        false
-    };
+    let should_include = has_exact
+        || (allow_fuzzy && has_fuzzy && final_score >= MIN_FUZZY_SCORE);
 
     if !should_include {
         return None;

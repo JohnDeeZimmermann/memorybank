@@ -41,8 +41,23 @@ pub fn run(
         .map(|hit| candidates[hit.original_index].clone())
         .collect();
 
+    let direct_bodies: Vec<String> = scored_hits
+        .iter()
+        .map(|hit| scored_pairs[hit.original_index].2.clone())
+        .collect();
+
     let direct_ids: Vec<String> = direct.iter().map(|d| d.id.clone()).collect();
     let related = store.related_documents(&direct_ids, include_invalidated)?;
-    output::print_query_results(&mut std::io::stdout(), title, &direct, &related, None);
+    let limit = store.config().query_text_preview_chars;
+    output::print_query_results(
+        &mut std::io::stdout(),
+        title,
+        &direct,
+        &related,
+        Some(output::BodyPreview {
+            bodies: &direct_bodies,
+            limit,
+        }),
+    );
     Ok(())
 }

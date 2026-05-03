@@ -30,6 +30,10 @@ pub fn database_path(root: &Path) -> PathBuf {
     memory_dir(root).join("memorybank.sqlite3")
 }
 
+pub fn config_path(root: &Path) -> PathBuf {
+    memory_dir(root).join("config.json")
+}
+
 pub fn ensure_memory_dirs(root: &Path) -> CliResult<()> {
     std::fs::create_dir_all(documents_dir(root))
         .and_then(|_| std::fs::create_dir_all(sql_dir(root)))

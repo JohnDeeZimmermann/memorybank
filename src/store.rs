@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
+use crate::config::{self, Config};
 use crate::db;
 use crate::error::{CliError, CliResult};
 use crate::models::{Document, DocumentSummary, DocumentType};
@@ -14,6 +15,7 @@ pub struct Store {
     conn: Connection,
     root: PathBuf,
     patch_log: SqlPatchLog,
+    config: Config,
 }
 
 impl Store {
@@ -23,20 +25,24 @@ impl Store {
         patch_log.ensure_init_patch()?;
         let conn = db::open(root)?;
         db::initialize_schema(&conn)?;
+        let config = config::load_or_create(root)?;
         Ok(Store {
             conn,
             root: root.to_path_buf(),
             patch_log,
+            config,
         })
     }
 
     pub fn open_existing(root: &Path) -> CliResult<Self> {
         let conn = db::open(root)?;
         let patch_log = SqlPatchLog::new(root);
+        let config = config::load_or_create(root)?;
         Ok(Store {
             conn,
             root: root.to_path_buf(),
             patch_log,
+            config,
         })
     }
 
@@ -51,15 +57,21 @@ impl Store {
         }
         let conn = db::open(root)?;
         patch_log.replay_all(&conn)?;
+        let config = config::load_or_create(root)?;
         Ok(Store {
             conn,
             root: root.to_path_buf(),
             patch_log,
+            config,
         })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     // ── Query ──────────────────────────────────────────

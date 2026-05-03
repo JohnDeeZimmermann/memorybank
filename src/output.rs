@@ -3,6 +3,11 @@ use std::path::Path;
 
 use crate::models::{Document, DocumentSummary};
 
+pub struct BodyPreview<'a> {
+    pub bodies: &'a [String],
+    pub limit: usize,
+}
+
 macro_rules! w {
     ($dst:expr, $($arg:tt)*) => {
         writeln!($dst, $($arg)*).unwrap()
@@ -70,7 +75,7 @@ pub fn print_query_results(
     title: &str,
     direct: &[DocumentSummary],
     related: &[DocumentSummary],
-    direct_bodies: Option<&[String]>,
+    direct_bodies: Option<BodyPreview>,
 ) {
     w!(out, "# Query Results: {title}\n");
     w!(out, "## Direct Matches\n");
@@ -79,16 +84,18 @@ pub fn print_query_results(
     } else {
         for (i, summary) in direct.iter().enumerate() {
             print_summary(out, summary, true);
-            if let Some(bodies) = direct_bodies {
-                if let Some(body) = bodies.get(i) {
+            if let Some(ref preview) = direct_bodies
+                && let Some(body) = preview.bodies.get(i)
+            {
                     w!(out, "\n---\n");
                     let trimmed = body.trim_end();
-                    if trimmed.chars().count() > 2_000 {
-                        let head: String = trimmed.chars().take(2_000).collect();
+                    if trimmed.chars().count() > preview.limit {
+                        let head: String = trimmed.chars().take(preview.limit).collect();
                         w!(out, "{}", head);
                         w!(
                             out,
-                            "\n... (truncated to 2,000 characters. Use `memorybank read {}` to read the full document.)",
+                            "\n... (truncated to {} characters. Use `memorybank read {}` to read the full document.)",
+                            format_limit(preview.limit),
                             summary.id
                         );
                     } else {
@@ -96,7 +103,6 @@ pub fn print_query_results(
                     }
                     w!(out, "");
                 }
-            }
         }
     }
     print_related(out, related);
@@ -166,4 +172,20 @@ fn invalidated_suffix(summary: &DocumentSummary) -> String {
     } else {
         String::new()
     }
+}
+
+fn format_limit(limit: usize) -> String {
+    let s = limit.to_string();
+    let len = s.len();
+    if len <= 3 {
+        return s;
+    }
+    let mut result = String::with_capacity(len + (len - 1) / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (len - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result
 }
