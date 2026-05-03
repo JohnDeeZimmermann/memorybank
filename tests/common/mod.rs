@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-
 pub fn bin_path() -> &'static str {
     env!("CARGO_BIN_EXE_memorybank")
 }
@@ -78,4 +77,3 @@ pub fn extract_backticked_field(markdown: &str, label: &str) -> String {
         .unwrap_or_else(|| panic!("field {label} missing closing backtick: {line}"));
     rest[..end].to_string()
 }
-

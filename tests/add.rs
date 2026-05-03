@@ -299,7 +299,10 @@ fn add_rejects_body_just_over_limit_counts_chars_not_bytes() {
 
     let body = format!("{}{}", "a".repeat(5000), "é".repeat(5001));
     assert_eq!(body.chars().count(), 10001);
-    assert!(body.len() > 10001, "utf-8 byte length should exceed char count");
+    assert!(
+        body.len() > 10001,
+        "utf-8 byte length should exceed char count"
+    );
 
     let payload = json!({
         "document": body,

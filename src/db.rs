@@ -26,6 +26,15 @@ pub fn initialize_schema(conn: &Connection) -> CliResult<()> {
         .map_err(|err| CliError::Database(format!("Unable to initialize schema: {err}")))
 }
 
+const ENSURE_INDICES_SQL: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_document_links_from ON document_links(from_document_id);
+"#;
+
+pub fn ensure_indices(conn: &Connection) -> CliResult<()> {
+    conn.execute_batch(ENSURE_INDICES_SQL)
+        .map_err(|err| CliError::Database(format!("Unable to ensure indices: {err}")))
+}
+
 pub fn document_exists(conn: &Connection, id: &str) -> CliResult<bool> {
     let count: i64 = conn
         .query_row(
@@ -175,17 +184,159 @@ fn with_related_files(
     conn: &Connection,
     summaries: Vec<DocumentSummary>,
 ) -> CliResult<Vec<DocumentSummary>> {
-    let mut files: HashMap<String, Vec<String>> = HashMap::new();
-    for summary in &summaries {
-        files.insert(summary.id.clone(), related_files(conn, &summary.id)?);
-    }
+    let ids: Vec<&str> = summaries.iter().map(|s| s.id.as_str()).collect();
+    let files_map = related_files_for_ids_bulk(conn, &ids)?;
     Ok(summaries
         .into_iter()
         .map(|mut summary| {
-            summary.related_files = files.remove(&summary.id).unwrap_or_default();
+            summary.related_files = files_map.get(&summary.id).cloned().unwrap_or_default();
             summary
         })
         .collect())
+}
+
+pub struct GraphDocumentRow {
+    pub id: String,
+    pub created_at: String,
+    pub invalidated: bool,
+}
+
+pub fn graph_documents(conn: &Connection) -> CliResult<Vec<GraphDocumentRow>> {
+    let mut stmt = conn
+        .prepare("SELECT id, created_at, invalidated FROM documents ORDER BY id")
+        .map_err(|err| {
+            CliError::Database(format!("Unable to prepare graph documents query: {err}"))
+        })?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(GraphDocumentRow {
+                id: row.get(0)?,
+                created_at: row.get(1)?,
+                invalidated: row.get::<_, i64>(2)? != 0,
+            })
+        })
+        .map_err(|err| CliError::Database(format!("Unable to query graph documents: {err}")))?;
+    collect_rows(rows)
+}
+
+pub fn graph_document_links(conn: &Connection) -> CliResult<Vec<(String, String)>> {
+    let mut stmt = conn
+        .prepare("SELECT from_document_id, to_document_id FROM document_links ORDER BY from_document_id, to_document_id")
+        .map_err(|err| CliError::Database(format!("Unable to prepare graph document links query: {err}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|err| {
+            CliError::Database(format!("Unable to query graph document links: {err}"))
+        })?;
+    collect_rows(rows)
+}
+
+pub fn graph_file_memberships(conn: &Connection) -> CliResult<Vec<(String, String)>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT document_id, file_path FROM document_files ORDER BY file_path, document_id",
+        )
+        .map_err(|err| {
+            CliError::Database(format!(
+                "Unable to prepare graph file memberships query: {err}"
+            ))
+        })?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|err| {
+            CliError::Database(format!("Unable to query graph file memberships: {err}"))
+        })?;
+    collect_rows(rows)
+}
+
+pub fn summaries_by_ids_bulk(
+    conn: &Connection,
+    ids: &[&str],
+    include_invalidated: bool,
+) -> CliResult<Vec<DocumentSummary>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders: Vec<String> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 1))
+        .collect();
+    let sql = if include_invalidated {
+        format!(
+            "SELECT id, created_at, invalidated, invalidation_reason, quick_summary, document_type FROM documents WHERE id IN ({}) ORDER BY id",
+            placeholders.join(", ")
+        )
+    } else {
+        format!(
+            "SELECT id, created_at, invalidated, invalidation_reason, quick_summary, document_type FROM documents WHERE id IN ({}) AND invalidated = 0 ORDER BY id",
+            placeholders.join(", ")
+        )
+    };
+
+    let mut stmt = conn.prepare(&sql).map_err(|err| {
+        CliError::Database(format!("Unable to prepare bulk summaries query: {err}"))
+    })?;
+
+    let params: Vec<&dyn rusqlite::types::ToSql> = ids
+        .iter()
+        .map(|id| id as &dyn rusqlite::types::ToSql)
+        .collect();
+    let rows = stmt
+        .query_map(params.as_slice(), row_to_summary)
+        .map_err(|err| CliError::Database(format!("Unable to query summaries bulk: {err}")))?;
+
+    let summaries = collect_rows(rows)?;
+    Ok(summaries)
+}
+
+pub fn related_files_for_ids_bulk(
+    conn: &Connection,
+    ids: &[&str],
+) -> CliResult<HashMap<String, Vec<String>>> {
+    let mut result: HashMap<String, Vec<String>> = HashMap::new();
+    for id in ids {
+        result.insert(id.to_string(), Vec::new());
+    }
+    if ids.is_empty() {
+        return Ok(result);
+    }
+
+    let placeholders: Vec<String> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 1))
+        .collect();
+    let sql = format!(
+        "SELECT document_id, file_path FROM document_files WHERE document_id IN ({}) ORDER BY document_id, file_path",
+        placeholders.join(", ")
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|err| {
+        CliError::Database(format!("Unable to prepare bulk related files query: {err}"))
+    })?;
+
+    let params: Vec<&dyn rusqlite::types::ToSql> = ids
+        .iter()
+        .map(|id| id as &dyn rusqlite::types::ToSql)
+        .collect();
+    let rows = stmt
+        .query_map(params.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|err| CliError::Database(format!("Unable to query bulk related files: {err}")))?;
+
+    for row in rows {
+        let (doc_id, file_path) =
+            row.map_err(|err| CliError::Database(format!("Unable to read bulk file row: {err}")))?;
+        result.entry(doc_id).or_default().push(file_path);
+    }
+    Ok(result)
 }
 
 fn row_to_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<Document> {

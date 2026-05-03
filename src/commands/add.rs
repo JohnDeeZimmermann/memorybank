@@ -39,9 +39,19 @@ pub fn run(store: &Store) -> CliResult<()> {
         document_type: input.document_type,
     };
 
-    let (patch_path, _) =
-        store.insert(&doc, &input.document, &related_files, &input.related_documents)?;
-    output::print_add_success(&mut std::io::stdout(), &doc, &related_files, &input.related_documents, &patch_path);
+    let (patch_path, _) = store.insert(
+        &doc,
+        &input.document,
+        &related_files,
+        &input.related_documents,
+    )?;
+    output::print_add_success(
+        &mut std::io::stdout(),
+        &doc,
+        &related_files,
+        &input.related_documents,
+        &patch_path,
+    );
     Ok(())
 }
 

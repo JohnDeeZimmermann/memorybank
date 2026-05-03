@@ -36,6 +36,7 @@ CREATE INDEX IF NOT EXISTS idx_document_files_file_path ON document_files(file_p
 CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(document_type);
 CREATE INDEX IF NOT EXISTS idx_documents_invalidated ON documents(invalidated);
 CREATE INDEX IF NOT EXISTS idx_document_links_to ON document_links(to_document_id);
+CREATE INDEX IF NOT EXISTS idx_document_links_from ON document_links(from_document_id);
 "#;
 
 pub struct SqlPatchLog {

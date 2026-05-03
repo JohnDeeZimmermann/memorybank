@@ -15,10 +15,7 @@ pub struct ScoredHit {
     pub original_index: usize,
 }
 
-pub fn score_candidates(
-    query: &str,
-    candidates: &[(usize, &str, &str)],
-) -> Vec<ScoredHit> {
+pub fn score_candidates(query: &str, candidates: &[(usize, &str, &str)]) -> Vec<ScoredHit> {
     let query = query.trim();
     if query.is_empty() {
         return Vec::new();
@@ -37,9 +34,15 @@ pub fn score_candidates(
     let mut hits = Vec::new();
 
     for &(original_index, summary, body) in candidates {
-        if let Some(scored) =
-            score_one(&atom, &mut matcher, query, summary, body, original_index, allow_fuzzy)
-        {
+        if let Some(scored) = score_one(
+            &atom,
+            &mut matcher,
+            query,
+            summary,
+            body,
+            original_index,
+            allow_fuzzy,
+        ) {
             hits.push(scored);
         }
     }
@@ -110,8 +113,7 @@ fn score_one(
     let has_exact = exact_summary || exact_body;
     let has_fuzzy = summary_fuzzy > 0 || body_fuzzy > 0;
 
-    let should_include = has_exact
-        || (allow_fuzzy && has_fuzzy && final_score >= MIN_FUZZY_SCORE);
+    let should_include = has_exact || (allow_fuzzy && has_fuzzy && final_score >= MIN_FUZZY_SCORE);
 
     if !should_include {
         return None;
@@ -151,10 +153,7 @@ mod tests {
 
     #[test]
     fn short_query_only_matches_exact() {
-        let candidates = vec![
-            (0, "ab", "body"),
-            (1, "a", "b"),
-        ];
+        let candidates = vec![(0, "ab", "body"), (1, "a", "b")];
         let hits = score_candidates("ab", &candidates);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].original_index, 0);

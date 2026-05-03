@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod db;
 mod error;
+mod graph_ranker;
 mod models;
 mod output;
 mod paths;

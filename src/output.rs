@@ -14,18 +14,29 @@ macro_rules! w {
     };
 }
 
-pub fn print_init(
-    out: &mut impl Write,
-    root: &Path,
-    rebuild: bool,
-    init_patch: &Path,
-) {
+pub fn print_init(out: &mut impl Write, root: &Path, rebuild: bool, init_patch: &Path) {
     w!(out, "# Memory Bank Initialized\n");
     w!(out, "- **Root:** `{}`", root.display());
-    w!(out, "- **Memory directory:** `{}`", root.join(".memory").display());
-    w!(out, "- **Documents directory:** `{}`", root.join(".memory/documents").display());
-    w!(out, "- **SQL directory:** `{}`", root.join(".memory/sql").display());
-    w!(out, "- **Database:** `{}`", root.join(".memory/memorybank.sqlite3").display());
+    w!(
+        out,
+        "- **Memory directory:** `{}`",
+        root.join(".memory").display()
+    );
+    w!(
+        out,
+        "- **Documents directory:** `{}`",
+        root.join(".memory/documents").display()
+    );
+    w!(
+        out,
+        "- **SQL directory:** `{}`",
+        root.join(".memory/sql").display()
+    );
+    w!(
+        out,
+        "- **Database:** `{}`",
+        root.join(".memory/memorybank.sqlite3").display()
+    );
     w!(out, "- **Init patch:** `{}`", init_patch.display());
     w!(out, "- **Rebuilt:** `{}`", rebuild);
 }
@@ -87,27 +98,30 @@ pub fn print_query_results(
             if let Some(ref preview) = direct_bodies
                 && let Some(body) = preview.bodies.get(i)
             {
-                    w!(out, "\n---\n");
-                    let trimmed = body.trim_end();
-                    if trimmed.chars().count() > preview.limit {
-                        let head: String = trimmed.chars().take(preview.limit).collect();
-                        w!(out, "{}", head);
-                        w!(
-                            out,
-                            "\n... (truncated to {} characters. Use `memorybank read {}` to read the full document.)",
-                            format_limit(preview.limit),
-                            summary.id
-                        );
-                    } else {
-                        w!(out, "{}", trimmed);
-                    }
-                    w!(out, "");
+                w!(out, "\n---\n");
+                let trimmed = body.trim_end();
+                if trimmed.chars().count() > preview.limit {
+                    let head: String = trimmed.chars().take(preview.limit).collect();
+                    w!(out, "{}", head);
+                    w!(
+                        out,
+                        "\n... (truncated to {} characters. Use `memorybank read {}` to read the full document.)",
+                        format_limit(preview.limit),
+                        summary.id
+                    );
+                } else {
+                    w!(out, "{}", trimmed);
                 }
+                w!(out, "");
+            }
         }
     }
     print_related(out, related);
     w!(out, "\n---\n");
-    w!(out, "Use `memorybank read <id>` to read a document's full content.");
+    w!(
+        out,
+        "Use `memorybank read <id>` to read a document's full content."
+    );
 }
 
 fn print_related(out: &mut impl Write, related: &[DocumentSummary]) {

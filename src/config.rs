@@ -11,6 +11,68 @@ pub struct Config {
     pub query_files_preview_chars: usize,
     #[serde(default = "default_query_text_preview_chars")]
     pub query_text_preview_chars: usize,
+    #[serde(default)]
+    pub graph_ranking: GraphRankingConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphRankingConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_max_related_suggestions")]
+    pub max_related_suggestions: usize,
+    #[serde(default = "default_max_file_fanout")]
+    pub max_file_fanout: usize,
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: usize,
+    #[serde(default = "default_tolerance")]
+    pub tolerance: f64,
+    #[serde(default = "default_damping")]
+    pub damping: f64,
+    #[serde(default = "default_recency_half_life_days")]
+    pub recency_half_life_days: f64,
+}
+
+impl Default for GraphRankingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_related_suggestions: 20,
+            max_file_fanout: 100,
+            max_iterations: 80,
+            tolerance: 1e-6,
+            damping: 0.85,
+            recency_half_life_days: 365.0,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_max_related_suggestions() -> usize {
+    20
+}
+
+fn default_max_file_fanout() -> usize {
+    100
+}
+
+fn default_max_iterations() -> usize {
+    80
+}
+
+fn default_tolerance() -> f64 {
+    1e-6
+}
+
+fn default_damping() -> f64 {
+    0.85
+}
+
+fn default_recency_half_life_days() -> f64 {
+    365.0
 }
 
 fn default_query_files_preview_chars() -> usize {
@@ -26,6 +88,7 @@ impl Default for Config {
         Self {
             query_files_preview_chars: default_query_files_preview_chars(),
             query_text_preview_chars: default_query_text_preview_chars(),
+            graph_ranking: GraphRankingConfig::default(),
         }
     }
 }
