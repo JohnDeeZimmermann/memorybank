@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use common::*;
-use serde_json::json;
+use serde_json::{json, Value};
 use tempfile::tempdir;
 
 fn init_and_add(root: &Path, body: &str, summary: &str, doc_type: &str, files: &[&str]) -> String {
@@ -234,4 +234,70 @@ fn query_before_init_returns_not_initialized() {
     assert_failure(&output);
     let err = stderr(&output);
     assert!(err.contains("ERROR: NOT_INITIALIZED"), "stderr: {err}");
+}
+
+#[test]
+fn init_creates_default_config_file_with_expected_keys() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+
+    assert_success(&run_cli(root, &["init"]));
+
+    let config_path = root.join(".memory/config.json");
+    assert!(
+        config_path.exists(),
+        "expected config file at {:?}",
+        config_path
+    );
+
+    let raw = fs::read_to_string(&config_path).expect("read config");
+    let config: Value = serde_json::from_str(&raw).expect("valid config json");
+
+    assert_eq!(config["query_files_preview_chars"], 2000);
+    assert_eq!(config["query_text_preview_chars"], 200);
+}
+
+#[test]
+fn add_auto_init_creates_default_config_file() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+
+    let payload = json!({
+        "document": "auto-init config creation",
+        "summary": "auto-init config",
+        "related_files": ["auto.txt"],
+        "related_documents": [],
+        "type": "COMMIT"
+    })
+    .to_string();
+    assert_success(&run_cli_with_stdin(root, &["add"], &payload));
+
+    let config_path = root.join(".memory/config.json");
+    assert!(
+        config_path.exists(),
+        "expected config file at {:?}",
+        config_path
+    );
+
+    let raw = fs::read_to_string(&config_path).expect("read config");
+    let config: Value = serde_json::from_str(&raw).expect("valid config json");
+    assert_eq!(config["query_files_preview_chars"], 2000);
+    assert_eq!(config["query_text_preview_chars"], 200);
+}
+
+#[test]
+fn invalid_config_json_causes_follow_up_commands_to_fail() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+
+    assert_success(&run_cli(root, &["init"]));
+    fs::write(root.join(".memory/config.json"), "{not-json").expect("write invalid config");
+
+    let query = run_cli(root, &["query-research", "anything"]);
+    assert_failure(&query);
+    let err = stderr(&query);
+
+    assert!(err.contains("ERROR: VALIDATION"), "stderr: {err}");
+    assert!(err.contains("Invalid config"), "stderr: {err}");
+    assert!(err.contains("config.json"), "stderr: {err}");
 }

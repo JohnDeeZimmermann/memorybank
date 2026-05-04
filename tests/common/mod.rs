@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+use serde_json::json;
+
 pub fn bin_path() -> &'static str {
     env!("CARGO_BIN_EXE_memorybank")
 }
@@ -76,4 +78,39 @@ pub fn extract_backticked_field(markdown: &str, label: &str) -> String {
         .find('`')
         .unwrap_or_else(|| panic!("field {label} missing closing backtick: {line}"));
     rest[..end].to_string()
+}
+
+pub fn add_doc(
+    root: &Path,
+    summary: &str,
+    document_type: &str,
+    body: &str,
+    related_files: &[&str],
+    related_documents: &[String],
+) -> String {
+    let payload = json!({
+        "document": body,
+        "summary": summary,
+        "related_files": related_files,
+        "related_documents": related_documents,
+        "type": document_type
+    })
+    .to_string();
+    let out = run_cli_with_stdin(root, &["add"], &payload);
+    assert_success(&out);
+    extract_backticked_field(&stdout(&out), "ID")
+}
+
+pub fn assert_ids_in_order(haystack: &str, ids: &[&str]) {
+    let mut last = 0usize;
+    for id in ids {
+        let pos = haystack
+            .find(&format!("`{id}`"))
+            .unwrap_or_else(|| panic!("missing id {id} in output:\n{haystack}"));
+        assert!(
+            pos >= last,
+            "id {id} appeared out of order in output:\n{haystack}"
+        );
+        last = pos;
+    }
 }
