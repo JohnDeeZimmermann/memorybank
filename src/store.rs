@@ -24,8 +24,9 @@ impl Store {
         let patch_log = SqlPatchLog::new(root);
         patch_log.ensure_init_patch()?;
         let conn = db::open(root)?;
-        db::initialize_schema(&conn)?;
+        patch_log.replay_all(&conn)?;
         db::ensure_indices(&conn)?;
+        db::ensure_vcs_triggers(&conn)?;
         let config = config::load_or_create(root)?;
         Ok(Store {
             conn,
@@ -48,6 +49,33 @@ impl Store {
         })
     }
 
+    pub fn open_for_write(root: &Path) -> CliResult<Self> {
+        paths::ensure_memory_dirs(root)?;
+        let patch_log = SqlPatchLog::new(root);
+        patch_log.ensure_init_patch()?;
+
+        if !paths::database_path(root).exists() {
+            return Self::rebuild(root);
+        }
+
+        let conn = db::open(root)?;
+        db::ensure_indices(&conn)?;
+
+        if !patch_log.is_current(&conn)? {
+            drop(conn);
+            return Self::rebuild(root);
+        }
+
+        db::ensure_vcs_triggers(&conn)?;
+        let config = config::load_or_create(root)?;
+        Ok(Store {
+            conn,
+            root: root.to_path_buf(),
+            patch_log,
+            config,
+        })
+    }
+
     pub fn rebuild(root: &Path) -> CliResult<Self> {
         paths::ensure_memory_dirs(root)?;
         let patch_log = SqlPatchLog::new(root);
@@ -61,6 +89,7 @@ impl Store {
         let conn = db::open(root)?;
         patch_log.replay_all(&conn)?;
         db::ensure_indices(&conn)?;
+        db::ensure_vcs_triggers(&conn)?;
         let config = config::load_or_create(root)?;
         Ok(Store {
             conn,
@@ -156,9 +185,7 @@ impl Store {
         related_documents: &[String],
     ) -> CliResult<(PathBuf, PathBuf)> {
         let sql = render_insert_sql(doc, related_files, related_documents);
-        let patch_path = self
-            .patch_log
-            .write_patch(&format!("add_{}", doc.id), &sql)?;
+        let patch_path = self.patch_log.write_patch("add", &doc.id, &sql)?;
 
         self.conn.execute_batch(&sql).map_err(|err| {
             CliError::Database(format!("Unable to insert document metadata: {err}"))

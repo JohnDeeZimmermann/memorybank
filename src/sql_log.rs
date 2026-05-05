@@ -1,9 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::Utc;
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
+use crate::db;
 use crate::error::{CliError, CliResult};
 use crate::paths;
 
@@ -39,6 +42,13 @@ CREATE INDEX IF NOT EXISTS idx_document_links_to ON document_links(to_document_i
 CREATE INDEX IF NOT EXISTS idx_document_links_from ON document_links(from_document_id);
 "#;
 
+pub struct PatchManifestEntry {
+    pub ordinal: i64,
+    pub filename: String,
+    pub checksum: String,
+    pub path: PathBuf,
+}
+
 pub struct SqlPatchLog {
     root: PathBuf,
 }
@@ -64,14 +74,14 @@ impl SqlPatchLog {
         Ok(path)
     }
 
-    pub fn write_patch(&self, kind: &str, sql: &str) -> CliResult<PathBuf> {
+    pub fn write_patch(&self, kind: &str, doc_uuid: &str, sql: &str) -> CliResult<PathBuf> {
         let dir = paths::sql_dir(&self.root);
         fs::create_dir_all(&dir).map_err(|err| {
             CliError::Storage(format!("Unable to create SQL log directory: {err}"))
         })?;
 
-        let sequence = self.next_sequence()?;
-        let filename = format!("{sequence:06}_{kind}.sql");
+        let timestamp = Utc::now().format("%Y%m%dT%H%M%S%3fZ");
+        let filename = format!("p{timestamp}_{doc_uuid}_{kind}.sql");
         let path = dir.join(filename);
 
         let mut tempfile = NamedTempFile::new_in(&dir).map_err(|err| {
@@ -86,49 +96,83 @@ impl SqlPatchLog {
     }
 
     pub fn replay_all(&self, conn: &Connection) -> CliResult<()> {
-        let mut patches = Vec::new();
-        for entry in fs::read_dir(paths::sql_dir(&self.root))
+        let manifest = self.manifest()?;
+        db::ensure_metadata_schema(conn)?;
+        db::clear_applied_patches(conn)?;
+        for entry in &manifest {
+            let sql = fs::read_to_string(&entry.path).map_err(|err| {
+                CliError::Replay(format!("Unable to read '{}': {err}", entry.path.display()))
+            })?;
+            conn.execute_batch(&sql).map_err(|err| {
+                CliError::Replay(format!(
+                    "Unable to replay '{}': {err}",
+                    entry.path.display()
+                ))
+            })?;
+            db::record_applied_patch(conn, entry, &Utc::now().to_rfc3339())?;
+        }
+        Ok(())
+    }
+
+    pub fn manifest(&self) -> CliResult<Vec<PatchManifestEntry>> {
+        let dir = paths::sql_dir(&self.root);
+        let mut patches: Vec<PathBuf> = Vec::new();
+        for entry in fs::read_dir(&dir)
             .map_err(|err| CliError::Replay(format!("Unable to read SQL patches: {err}")))?
         {
             let entry = entry
                 .map_err(|err| CliError::Replay(format!("Unable to read SQL patch: {err}")))?;
             let path = entry.path();
-            if path.extension().is_some_and(|extension| extension == "sql") {
+            if path.extension().is_some_and(|ext| ext == "sql") {
                 patches.push(path);
             }
         }
         patches.sort();
 
-        for path in patches {
-            let sql = fs::read_to_string(&path).map_err(|err| {
+        let mut entries = Vec::new();
+        for (idx, path) in patches.into_iter().enumerate() {
+            let filename = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+                .ok_or_else(|| {
+                    CliError::Replay(format!("Invalid patch filename: {}", path.display()))
+                })?;
+            let content = fs::read(&path).map_err(|err| {
                 CliError::Replay(format!("Unable to read '{}': {err}", path.display()))
             })?;
-            conn.execute_batch(&sql).map_err(|err| {
-                CliError::Replay(format!("Unable to replay '{}': {err}", path.display()))
-            })?;
+            let checksum = format!("sha256:{}", hex_encode(&Sha256::digest(&content)));
+            entries.push(PatchManifestEntry {
+                ordinal: (idx + 1) as i64,
+                filename,
+                checksum,
+                path,
+            });
         }
-        Ok(())
+        Ok(entries)
     }
 
-    fn next_sequence(&self) -> CliResult<u64> {
-        let dir = paths::sql_dir(&self.root);
-        let mut max_sequence = 0;
-        for entry in fs::read_dir(&dir)
-            .map_err(|err| CliError::Storage(format!("Unable to read SQL log directory: {err}")))?
+    pub fn is_current(&self, conn: &Connection) -> CliResult<bool> {
+        let fs_manifest = self.manifest()?;
+        db::ensure_metadata_schema(conn)?;
+        let db_manifest = db::applied_patch_manifest(conn)?;
+
+        if fs_manifest.len() != db_manifest.len() {
+            return Ok(false);
+        }
+
+        for (fs_entry, (db_ordinal, db_filename, db_checksum)) in
+            fs_manifest.iter().zip(db_manifest.iter())
         {
-            let entry = entry
-                .map_err(|err| CliError::Storage(format!("Unable to read SQL log entry: {err}")))?;
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            let Some((prefix, _)) = name.split_once('_') else {
-                continue;
-            };
-            if let Ok(sequence) = prefix.parse::<u64>() {
-                max_sequence = max_sequence.max(sequence);
+            if fs_entry.ordinal != *db_ordinal
+                || fs_entry.filename != *db_filename
+                || fs_entry.checksum != *db_checksum
+            {
+                return Ok(false);
             }
         }
-        Ok(max_sequence + 1)
+
+        Ok(true)
     }
 }
 
@@ -138,4 +182,8 @@ pub fn sql_string(value: &str) -> String {
 
 pub fn sql_optional_string(value: Option<&str>) -> String {
     value.map(sql_string).unwrap_or_else(|| "NULL".to_string())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

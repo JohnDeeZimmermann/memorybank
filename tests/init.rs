@@ -4,7 +4,9 @@ use std::fs;
 use std::path::Path;
 
 use common::*;
-use serde_json::{json, Value};
+use rusqlite::Connection;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 fn init_and_add(root: &Path, body: &str, summary: &str, doc_type: &str, files: &[&str]) -> String {
@@ -300,4 +302,40 @@ fn invalid_config_json_causes_follow_up_commands_to_fail() {
     assert!(err.contains("ERROR: VALIDATION"), "stderr: {err}");
     assert!(err.contains("Invalid config"), "stderr: {err}");
     assert!(err.contains("config.json"), "stderr: {err}");
+}
+
+#[test]
+fn rebuild_rewrites_patch_metadata_table_with_all_files_and_checksums() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    assert_success(&run_cli(root, &["init"]));
+    let _doc1 = add_doc(root, "one", "COMMIT", "one body", &[], &[]);
+    let _doc2 = add_doc(root, "two", "COMMIT", "two body", &[], &[]);
+
+    assert_success(&run_cli(root, &["init", "--rebuild"]));
+
+    let mut expected = fs::read_dir(root.join(".memory/sql"))
+        .expect("read sql dir")
+        .map(|entry| {
+            let entry = entry.expect("entry");
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let bytes = fs::read(entry.path()).expect("read patch bytes");
+            let checksum = format!("sha256:{:x}", Sha256::digest(bytes));
+            (name, checksum)
+        })
+        .collect::<Vec<_>>();
+    expected.sort();
+
+    let conn = Connection::open(root.join(".memory/memorybank.sqlite3")).expect("open sqlite db");
+    let mut stmt = conn
+        .prepare("SELECT filename, checksum FROM memorybank_applied_patches ORDER BY filename")
+        .expect("prepare query");
+    let actual = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .expect("query metadata")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect metadata rows");
+
+    assert_eq!(actual.len(), expected.len(), "actual={actual:?} expected={expected:?}");
+    assert_eq!(actual, expected, "metadata table should mirror sql dir contents");
 }

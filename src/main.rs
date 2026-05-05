@@ -31,7 +31,7 @@ fn run() -> CliResult<()> {
     match cli.command {
         Commands::Init { rebuild } => commands::init::run(&root, rebuild),
         Commands::Add => {
-            let store = store::Store::open(&root)?;
+            let store = store::Store::open_for_write(&root)?;
             commands::add::run(&store)
         }
         Commands::Read { document_id } => {

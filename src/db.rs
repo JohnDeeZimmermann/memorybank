@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::error::{CliError, CliResult};
 use crate::models::{Document, DocumentSummary, DocumentType};
 use crate::paths;
-use crate::sql_log::SCHEMA_SQL;
+use crate::sql_log::PatchManifestEntry;
 
 pub fn open(root: &Path) -> CliResult<Connection> {
     let conn = Connection::open(paths::database_path(root))
@@ -21,11 +21,6 @@ pub fn configure(conn: &Connection) -> CliResult<()> {
     Ok(())
 }
 
-pub fn initialize_schema(conn: &Connection) -> CliResult<()> {
-    conn.execute_batch(SCHEMA_SQL)
-        .map_err(|err| CliError::Database(format!("Unable to initialize schema: {err}")))
-}
-
 const ENSURE_INDICES_SQL: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_document_links_from ON document_links(from_document_id);
 "#;
@@ -33,6 +28,76 @@ CREATE INDEX IF NOT EXISTS idx_document_links_from ON document_links(from_docume
 pub fn ensure_indices(conn: &Connection) -> CliResult<()> {
     conn.execute_batch(ENSURE_INDICES_SQL)
         .map_err(|err| CliError::Database(format!("Unable to ensure indices: {err}")))
+}
+
+const ENSURE_METADATA_SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS memorybank_applied_patches (
+  ordinal INTEGER NOT NULL PRIMARY KEY,
+  filename TEXT NOT NULL UNIQUE,
+  checksum TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
+"#;
+
+pub fn ensure_metadata_schema(conn: &Connection) -> CliResult<()> {
+    conn.execute_batch(ENSURE_METADATA_SCHEMA_SQL)
+        .map_err(|err| CliError::Database(format!("Unable to ensure metadata schema: {err}")))
+}
+
+pub fn clear_applied_patches(conn: &Connection) -> CliResult<()> {
+    conn.execute("DELETE FROM memorybank_applied_patches", [])
+        .map_err(|err| CliError::Database(format!("Unable to clear applied patches: {err}")))?;
+    Ok(())
+}
+
+pub fn record_applied_patch(
+    conn: &Connection,
+    entry: &PatchManifestEntry,
+    applied_at: &str,
+) -> CliResult<()> {
+    conn.execute(
+        "INSERT INTO memorybank_applied_patches (ordinal, filename, checksum, applied_at) VALUES (?1, ?2, ?3, ?4)",
+        params![entry.ordinal, entry.filename, entry.checksum, applied_at],
+    )
+    .map_err(|err| CliError::Database(format!("Unable to record applied patch: {err}")))?;
+    Ok(())
+}
+
+pub fn applied_patch_manifest(conn: &Connection) -> CliResult<Vec<(i64, String, String)>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT ordinal, filename, checksum FROM memorybank_applied_patches ORDER BY ordinal",
+        )
+        .map_err(|err| {
+            CliError::Database(format!("Unable to prepare applied patches query: {err}"))
+        })?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|err| CliError::Database(format!("Unable to query applied patches: {err}")))?;
+    collect_rows(rows)
+}
+
+const ENSURE_VCS_TRIGGERS_SQL: &str = r#"
+CREATE TRIGGER IF NOT EXISTS preserve_earliest_invalidation
+AFTER UPDATE OF invalidated, invalidation_reason ON documents
+WHEN OLD.invalidated = 1
+BEGIN
+  UPDATE documents
+  SET invalidated = 1,
+      invalidation_reason = OLD.invalidation_reason
+  WHERE id = OLD.id;
+END;
+"#;
+
+pub fn ensure_vcs_triggers(conn: &Connection) -> CliResult<()> {
+    conn.execute_batch(ENSURE_VCS_TRIGGERS_SQL)
+        .map_err(|err| CliError::Database(format!("Unable to ensure VCS triggers: {err}")))
 }
 
 pub fn document_exists(conn: &Connection, id: &str) -> CliResult<bool> {
